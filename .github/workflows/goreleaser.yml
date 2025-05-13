@@ -1,0 +1,47 @@
+name: Goreleaser
+
+on:
+  push:
+    tags:
+      - "*"
+
+permissions:
+  contents: write
+
+env:
+  GOPATH: /go_path
+  GOCACHE: /go_cache
+  GOPROXY: http://oa-mirror.mediatek.inc/repository/golang/
+  GOINSECURE: gitea.mediatek.inc
+  GOPRIVATE: gitea.mediatek.inc
+  GONOPROXY: gitea.mediatek.inc
+
+jobs:
+  goreleaser:
+    runs-on: ubuntu-latest
+    steps:
+      - name: add certificate
+        uses: https://gitea.mediatek.inc/actions/mtk-cert-action@v1.2.0
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup go
+        id: setup-go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          check-latest: true
+
+      - name: Run GoReleaser
+        uses: goreleaser/goreleaser-action@v6
+        with:
+          # either 'goreleaser' (default) or 'goreleaser-pro'
+          distribution: goreleaser
+          version: latest
+          args: release --clean
+        env:
+          GITEA_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GORELEASER_FORCE_TOKEN: "gitea"
+          GO_VERSION: ${{ steps.setup-go.outputs.go-version }}

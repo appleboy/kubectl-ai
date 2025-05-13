@@ -8,6 +8,23 @@
 
 version: 2
 
+gomod:
+  # Proxy a module from proxy.golang.org, making the builds verifiable.
+  # This will only be effective if running against a tag. Snapshots will ignore
+  # this setting.
+  # Notice: for this to work your `build.main` must be a package, not a `.go` file.
+  proxy: true
+
+  # If proxy is true, use these environment variables when running `go mod`
+  # commands (namely, `go mod tidy`).
+  #
+  # Default: `os.Environ()` merged with what you set the root `env` section.
+  env:
+    - GOPROXY=http://oa-mirror.mediatek.inc/repository/golang/
+    - GOINSECURE=gitea.mediatek.inc
+    - GOPRIVATE=gitea.mediatek.inc
+    - GONOPROXY=gitea.mediatek.inc
+
 before:
   hooks:
     # You may remove this if you don't use go modules.
@@ -39,16 +56,40 @@ archives:
       - goos: windows
         formats: [zip]
 
-changelog:
-  sort: asc
-  filters:
-    exclude:
-      - "^docs:"
-      - "^test:"
-
 release:
   footer: >-
 
     ---
 
     Released by [GoReleaser](https://github.com/goreleaser/goreleaser).
+
+changelog:
+  use: github
+  groups:
+    - title: Features
+      regexp: "^.*feat[(\\w)]*:+.*$"
+      order: 0
+    - title: "Bug fixes"
+      regexp: "^.*fix[(\\w)]*:+.*$"
+      order: 1
+    - title: "Enhancements"
+      regexp: "^.*chore[(\\w)]*:+.*$"
+      order: 2
+    - title: "Refactor"
+      regexp: "^.*refactor[(\\w)]*:+.*$"
+      order: 3
+    - title: "Build process updates"
+      regexp: ^.*?(build|ci)(\(.+\))??!?:.+$
+      order: 4
+    - title: "Documentation updates"
+      regexp: ^.*?docs?(\(.+\))??!?:.+$
+      order: 4
+    - title: Others
+      order: 999
+
+gitea_urls:
+  api: https://gitea.mediatek.inc/api/v1
+  download: https://gitea.mediatek.inc
+  # set to true if you use a self-signed certificate
+  skip_tls_verify: true
+force_token: gitea
