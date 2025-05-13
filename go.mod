@@ -7,6 +7,8 @@ toolchain go1.24.3
 // Needed for multiple go modules in one repo
 replace github.com/GoogleCloudPlatform/kubectl-ai/gollm => ./gollm
 
+replace github.com/GoogleCloudPlatform/kubectl-ai => ./
+
 require (
 	github.com/GoogleCloudPlatform/kubectl-ai/gollm v0.0.0-00010101000000-000000000000
 	github.com/charmbracelet/glamour v0.10.0
