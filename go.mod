@@ -25,6 +25,7 @@ require (
 	cloud.google.com/go v0.118.3 // indirect
 	cloud.google.com/go/auth v0.15.0 // indirect
 	cloud.google.com/go/compute/metadata v0.6.0 // indirect
+	gitea.mediatek.inc/go/base v1.0.0 // indirect
 	github.com/Azure/azure-sdk-for-go/sdk/ai/azopenai v0.7.2 // indirect
 	github.com/Azure/azure-sdk-for-go/sdk/azcore v1.18.0 // indirect
 	github.com/Azure/azure-sdk-for-go/sdk/azidentity v1.9.0 // indirect

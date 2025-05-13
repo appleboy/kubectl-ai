@@ -28,6 +28,7 @@ import (
 	"sync"
 	"time"
 
+	"gitea.mediatek.inc/go/base"
 	"k8s.io/klog/v2"
 )
 
@@ -192,14 +193,21 @@ func DefaultIsRetryableError(err error) bool {
 // This is shared by all providers that need custom HTTP transport.
 func createCustomHTTPClient(skipVerify bool) *http.Client {
 	if !skipVerify {
-		return http.DefaultClient
+		clinet := &http.Client{
+			Transport: &http.Transport{
+				Proxy:           http.ProxyFromEnvironment,
+				TLSClientConfig: base.MTKtlsConfig(),
+			},
+		}
+		// Set the default timeout for the HTTP client
+		clinet.Timeout = 30 * time.Second
+		return clinet
 	}
+
 	return &http.Client{
 		Transport: &http.Transport{
-			Proxy: http.ProxyFromEnvironment,
-			TLSClientConfig: &tls.Config{
-				InsecureSkipVerify: true,
-			},
+			Proxy:           http.ProxyFromEnvironment,
+			TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
 		},
 	}
 }
