@@ -4,7 +4,7 @@ set -euo pipefail
 # Check for required commands
 for cmd in curl tar; do
   if ! command -v "$cmd" >/dev/null 2>&1; then
-    echo "Error: $cmd is not installed. Please install $cmd to proceed."
+    echo "Error: Required command '$cmd' is not installed. Please install '$cmd' to continue."
     exit 1
   fi
 done
@@ -15,25 +15,37 @@ BINARY="kubectl-ai"
 # Detect OS
 sysOS="$(uname | tr '[:upper:]' '[:lower:]')"
 case "$sysOS" in
-  linux)   OS="Linux" ;;
-  darwin)  OS="Darwin" ;;
-  *)
-    echo "If you are on Windows or another unsupported OS, please follow the manual installation instructions at:"
-    echo "https://github.com/GoogleCloudPlatform/kubectl-ai#manual-installation-linux-macos-and-windows"
-    exit 1
-    ;;
+linux)
+  OS="Linux"
+  EXT="tar.gz"
+  ;;
+darwin)
+  OS="Darwin"
+  EXT="tar.gz"
+  ;;
+mingw* | msys* | cygwin* | windowsnt)
+  OS="Windows"
+  EXT="zip"
+  ;;
+*)
+  echo "Unsupported operating system detected."
+  echo "Please refer to the manual installation guide:"
+  echo "https://github.com/GoogleCloudPlatform/kubectl-ai#manual-installation-linux-macos-and-windows"
+  exit 1
+  ;;
 esac
 
 # Detect ARCH
 ARCH="$(uname -m)"
 case "$ARCH" in
-  x86_64|amd64) ARCH="x86_64" ;;
-  arm64|aarch64) ARCH="arm64" ;;
-  *)
-    echo "If you are on an unsupported architecture, please follow the manual installation instructions at:"
-    echo "https://github.com/GoogleCloudPlatform/kubectl-ai#manual-installation-linux-macos-and-windows"
-    exit 1
-    ;;
+x86_64 | amd64) ARCH="x86_64" ;;
+arm64 | aarch64) ARCH="arm64" ;;
+*)
+  echo "Unsupported system architecture detected."
+  echo "Please refer to the manual installation guide:"
+  echo "https://github.com/GoogleCloudPlatform/kubectl-ai#manual-installation-linux-macos-and-windows"
+  exit 1
+  ;;
 esac
 
 # Get latest version tag from GitHub API, Use GITHUB_TOKEN if available to avoid potential rate limit
@@ -43,27 +55,42 @@ else
   auth_hdr=""
 fi
 LATEST_TAG=$(curl -s -H "$auth_hdr" \
-  "https://api.github.com/repos/$REPO/releases/latest" \
-  | sed -n 's/.*"tag_name": *"\([^"]*\)".*/\1/p')
+  "https://api.github.com/repos/$REPO/releases/latest" | sed -n 's/.*"tag_name": *"\([^"]*\)".*/\1/p')
 if [ -z "$LATEST_TAG" ]; then
-  echo "Failed to fetch latest release tag."
+  echo "Error: Unable to retrieve the latest release version from GitHub."
   exit 1
 fi
 
 # Compose download URL
-TARBALL="kubectl-ai_${OS}_${ARCH}.tar.gz"
-URL="https://github.com/$REPO/releases/download/$LATEST_TAG/$TARBALL"
+ARCHIVE="kubectl-ai_${OS}_${ARCH}.${EXT}"
+URL="https://github.com/$REPO/releases/download/$LATEST_TAG/$ARCHIVE"
 
 # Download and extract
-echo "Downloading $URL ..."
-curl -fSL --retry 3 "$URL" -o "$TARBALL"
-tar --no-same-owner -xzf "$TARBALL"
+echo "Downloading release from: $URL ..."
+curl -fSL --retry 3 "$URL" -o "$ARCHIVE"
 
-# Move binary to /usr/local/bin (may require sudo)
-echo "Installing $BINARY to /usr/local/bin (may require sudo)..."
-sudo install -m 0755 "$BINARY" /usr/local/bin/
+if [ "$OS" = "Windows" ]; then
+  if command -v unzip >/dev/null 2>&1; then
+    unzip -o "$ARCHIVE"
+  else
+    # Try PowerShell extraction
+    if command -v powershell.exe >/dev/null 2>&1; then
+      powershell.exe -Command "Expand-Archive -Path '$ARCHIVE' -DestinationPath . -Force"
+    else
+      echo "Error: Neither 'unzip' nor PowerShell is available to extract the zip file on Windows."
+      exit 1
+    fi
+  fi
+  # Move binary to current directory (user must add to PATH manually)
+  echo "Please move '$BINARY.exe' to a directory included in your PATH (e.g., C:\\Windows\\System32) to complete the installation."
+else
+  tar --no-same-owner -xzf "$ARCHIVE"
+  # Move binary to /usr/local/bin (may require sudo)
+  echo "Installing '$BINARY' to /usr/local/bin (administrator privileges may be required)..."
+  sudo install -m 0755 "$BINARY" /usr/local/bin/
+fi
 
 # Clean up
-rm "$TARBALL"
+rm "$ARCHIVE"
 
-echo "✅ $BINARY installed successfully! Run '$BINARY --help' to get started."
+echo "✅ Installation complete! You can now run '$BINARY --help' to get started."
