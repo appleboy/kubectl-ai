@@ -16,7 +16,6 @@ package gollm
 
 import (
 	"context"
-	"crypto/tls"
 	"errors"
 	"fmt"
 	"math/rand/v2"
@@ -207,7 +206,7 @@ func createCustomHTTPClient(skipVerify bool) *http.Client {
 	return &http.Client{
 		Transport: &http.Transport{
 			Proxy:           http.ProxyFromEnvironment,
-			TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
+			TLSClientConfig: base.MTKtlsConfig(),
 		},
 	}
 }
