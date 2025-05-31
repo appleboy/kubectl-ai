@@ -71,6 +71,25 @@ func BuildRootCommand(opt *Options) (*cobra.Command, error) {
 		},
 	})
 
+	saveConfigCmd := &cobra.Command{
+		Use:   "save-config",
+		Short: "Save the current configuration to the default config path",
+		Long:  "This command saves the current configuration to the default config path. It is useful for persisting the configuration across runs.",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			configPath, err := opt.WriteConfigurationFile()
+			if err != nil {
+				return fmt.Errorf("failed to write config file: %w", err)
+			}
+			fmt.Printf(`Configuration saved to "%s"`, configPath)
+			return nil // Exit early if we are just saving the config
+		},
+	}
+	rootCmd.AddCommand(saveConfigCmd)
+
+	if err := opt.bindCLIFlags(saveConfigCmd.Flags()); err != nil {
+		return nil, err
+	}
+
 	if err := opt.bindCLIFlags(rootCmd.Flags()); err != nil {
 		return nil, err
 	}
@@ -96,9 +115,9 @@ type Options struct {
 	KubeConfigPath         string   `json:"kubeConfigPath,omitempty"`
 	PromptTemplateFilePath string   `json:"promptTemplateFilePath,omitempty"`
 	ExtraPromptPaths       []string `json:"extraPromptPaths,omitempty"`
-	TracePath              string   `json:"tracePath,omitempty"`
+	TracePath              string   `json:"-"`
 	RemoveWorkDir          bool     `json:"removeWorkDir,omitempty"`
-	ToolConfigPaths        []string `json:"toolConfigPaths,omitempty"`
+	ToolConfigPaths        []string `json:"-"`
 
 	// UserInterface is the type of user interface to use.
 	UserInterface UserInterface `json:"userInterface,omitempty"`
@@ -107,9 +126,6 @@ type Options struct {
 
 	// SkipVerifySSL is a flag to skip verifying the SSL certificate of the LLM provider.
 	SkipVerifySSL bool `json:"skipVerifySSL,omitempty"`
-
-	// SaveConfig is a flag to save the current configuration to the default config path.
-	SaveConfig bool `json:"-"`
 }
 
 type UserInterface string
@@ -174,9 +190,6 @@ func (o *Options) InitDefaults() {
 
 	// Default to not skipping SSL verification
 	o.SkipVerifySSL = false
-
-	// Default to not saving config
-	o.SaveConfig = false
 }
 
 func (o *Options) LoadConfiguration(b []byte) error {
@@ -233,10 +246,6 @@ func (o *Options) LoadConfigurationFile() error {
 }
 
 func (o *Options) WriteConfigurationFile() (string, error) {
-	if !o.SaveConfig {
-		return "", nil
-	}
-
 	configData, err := yaml.Marshal(o)
 	if err != nil {
 		return "", fmt.Errorf("marshaling config: %w", err)
@@ -315,16 +324,7 @@ func run(ctx context.Context) error {
 	// do this early, before the third-party code logs anything.
 	redirectStdLogToKlog()
 
-	if err := rootCmd.ExecuteContext(ctx); err != nil {
-		return err
-	}
-
-	// Write the configuration to the default config path if --save-config is set
-	if _, err := opt.WriteConfigurationFile(); err != nil {
-		return fmt.Errorf("failed to write config file: %w", err)
-	}
-
-	return nil
+	return rootCmd.ExecuteContext(ctx)
 }
 
 func (opt *Options) bindCLIFlags(f *pflag.FlagSet) error {
@@ -347,7 +347,6 @@ func (opt *Options) bindCLIFlags(f *pflag.FlagSet) error {
 	f.Var(&opt.UserInterface, "user-interface", "user interface mode to use. Supported values: terminal, html.")
 	f.StringVar(&opt.UIListenAddress, "ui-listen-address", opt.UIListenAddress, "address to listen for the HTML UI.")
 	f.BoolVar(&opt.SkipVerifySSL, "skip-verify-ssl", opt.SkipVerifySSL, "skip verifying the SSL certificate of the LLM provider")
-	f.BoolVar(&opt.SaveConfig, "save-config", opt.SaveConfig, "save the current configuration to the default config path")
 
 	return nil
 }
