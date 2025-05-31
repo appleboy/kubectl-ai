@@ -536,8 +536,24 @@ func (c *grokStreamCandidate) Parts() []Part {
 
 	// Include tool calls if present
 	if len(c.streamChoice.Delta.ToolCalls) > 0 {
+		// Convert ChatCompletionToolCallDelta to ChatCompletionMessageToolCall
+		toolCalls := make([]openai.ChatCompletionMessageToolCall, 0, len(c.streamChoice.Delta.ToolCalls))
+		for _, delta := range c.streamChoice.Delta.ToolCalls {
+			// Create a new ChatCompletionMessageToolCall directly
+			toolCall := openai.ChatCompletionMessageToolCall{
+				ID: delta.ID,
+				Function: openai.ChatCompletionMessageToolCallFunction{
+					Name:      delta.Function.Name,
+					Arguments: delta.Function.Arguments,
+				},
+				Type: "function", // The type is always "function" for function calls
+			}
+
+			toolCalls = append(toolCalls, toolCall)
+		}
+
 		parts = append(parts, &grokStreamPart{
-			toolCalls: c.streamChoice.Delta.ToolCalls,
+			toolCalls: toolCalls,
 		})
 	}
 
@@ -547,7 +563,7 @@ func (c *grokStreamCandidate) Parts() []Part {
 // grokStreamPart adapts streaming parts to the Part interface.
 type grokStreamPart struct {
 	content   string
-	toolCalls []openai.ChatCompletionChunkChoiceDeltaToolCall
+	toolCalls []openai.ChatCompletionMessageToolCall
 }
 
 // Ensure the streaming part implements Part interface.

@@ -18,6 +18,7 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -25,12 +26,14 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"slices"
 	"strings"
 	"syscall"
 
 	"github.com/GoogleCloudPlatform/kubectl-ai/gollm"
 	"github.com/GoogleCloudPlatform/kubectl-ai/pkg/agent"
 	"github.com/GoogleCloudPlatform/kubectl-ai/pkg/journal"
+	"github.com/GoogleCloudPlatform/kubectl-ai/pkg/mcp"
 	"github.com/GoogleCloudPlatform/kubectl-ai/pkg/tools"
 	"github.com/GoogleCloudPlatform/kubectl-ai/pkg/ui"
 	"github.com/GoogleCloudPlatform/kubectl-ai/pkg/ui/html"
@@ -71,7 +74,6 @@ func BuildRootCommand(opt *Options) (*cobra.Command, error) {
 	if err := opt.bindCLIFlags(rootCmd.Flags()); err != nil {
 		return nil, err
 	}
-
 	return rootCmd, nil
 }
 
@@ -89,16 +91,19 @@ type Options struct {
 	// It requires a query to be provided as a positional argument.
 	Quiet                  bool     `json:"quiet,omitempty"`
 	MCPServer              bool     `json:"mcpServer,omitempty"`
+	MCPClient              bool     `json:"mcpClient,omitempty"`
 	MaxIterations          int      `json:"maxIterations,omitempty"`
 	KubeConfigPath         string   `json:"kubeConfigPath,omitempty"`
 	PromptTemplateFilePath string   `json:"promptTemplateFilePath,omitempty"`
 	ExtraPromptPaths       []string `json:"extraPromptPaths,omitempty"`
 	TracePath              string   `json:"tracePath,omitempty"`
 	RemoveWorkDir          bool     `json:"removeWorkDir,omitempty"`
-	ToolConfigPath         []string `json:"toolConfigPath,omitempty"`
+	ToolConfigPaths        []string `json:"toolConfigPaths,omitempty"`
 
 	// UserInterface is the type of user interface to use.
 	UserInterface UserInterface `json:"userInterface,omitempty"`
+	// UIListenAddress is the address to listen for the HTML UI.
+	UIListenAddress string `json:"uiListenAddress,omitempty"`
 
 	// SkipVerifySSL is a flag to skip verifying the SSL certificate of the LLM provider.
 	SkipVerifySSL bool `json:"skipVerifySSL,omitempty"`
@@ -133,6 +138,11 @@ func (u *UserInterface) Type() string {
 	return "UserInterface"
 }
 
+var defaultToolConfigPaths = []string{
+	filepath.Join("{CONFIG}", "kubectl-ai", "tools.yaml"),
+	filepath.Join("{HOME}", ".config", "kubectl-ai", "tools.yaml"),
+}
+
 var defaultConfigPaths = []string{
 	filepath.Join("{CONFIG}", "kubectl-ai", "config.yaml"),
 	filepath.Join("{HOME}", ".config", "kubectl-ai", "config.yaml"),
@@ -144,6 +154,7 @@ func (o *Options) InitDefaults() {
 	// by default, confirm before executing kubectl commands that modify resources in the cluster.
 	o.SkipPermissions = false
 	o.MCPServer = false
+	o.MCPClient = false
 	// We now default to our strongest model (gemini-2.5-pro-exp-03-25) which supports tool use natively.
 	// so we don't need shim.
 	o.EnableToolUseShim = false
@@ -155,13 +166,11 @@ func (o *Options) InitDefaults() {
 	o.ExtraPromptPaths = []string{}
 	o.TracePath = filepath.Join(os.TempDir(), "kubectl-ai-trace.txt")
 	o.RemoveWorkDir = false
-	o.ToolConfigPath = []string{
-		filepath.Join("{CONFIG}", "kubectl-ai", "tools.yaml"),
-		filepath.Join("{HOME}", ".config", "kubectl-ai", "tools.yaml"),
-	}
-
+	o.ToolConfigPaths = defaultToolConfigPaths
 	// Default to terminal UI
 	o.UserInterface = UserInterfaceTerminal
+	// Default UI listen address for HTML UI
+	o.UIListenAddress = "localhost:8888"
 
 	// Default to not skipping SSL verification
 	o.SkipVerifySSL = false
@@ -209,7 +218,7 @@ func (o *Options) LoadConfigurationFile() error {
 		configBytes, err := os.ReadFile(filepath.Clean(finalPath))
 		if err != nil {
 			if os.IsNotExist(err) {
-				// ignore
+				// ignore missing config files, they are optional
 			} else {
 				fmt.Fprintf(os.Stderr, "warning: could not load defaults from %q: %v\n", finalPath, err)
 			}
@@ -330,11 +339,13 @@ func (opt *Options) bindCLIFlags(f *pflag.FlagSet) error {
 	f.StringVar(&opt.ModelID, "model", opt.ModelID, "language model e.g. gemini-2.0-flash-thinking-exp-01-21, gemini-2.0-flash")
 	f.BoolVar(&opt.SkipPermissions, "skip-permissions", opt.SkipPermissions, "(dangerous) skip asking for confirmation before executing kubectl commands that modify resources")
 	f.BoolVar(&opt.MCPServer, "mcp-server", opt.MCPServer, "run in MCP server mode")
-	f.StringArrayVar(&opt.ToolConfigPath, "custom-tools-config", opt.ToolConfigPath, "path to custom tools config file")
+	f.StringArrayVar(&opt.ToolConfigPaths, "custom-tools-config", opt.ToolConfigPaths, "path to custom tools config file or directory")
+	f.BoolVar(&opt.MCPClient, "mcp-client", opt.MCPClient, "enable MCP client mode to connect to external MCP servers")
 	f.BoolVar(&opt.EnableToolUseShim, "enable-tool-use-shim", opt.EnableToolUseShim, "enable tool use shim")
 	f.BoolVar(&opt.Quiet, "quiet", opt.Quiet, "run in non-interactive mode, requires a query to be provided as a positional argument")
 
-	f.Var(&opt.UserInterface, "user-interface", "user interface mode to use")
+	f.Var(&opt.UserInterface, "user-interface", "user interface mode to use. Supported values: terminal, html.")
+	f.StringVar(&opt.UIListenAddress, "ui-listen-address", opt.UIListenAddress, "address to listen for the HTML UI.")
 	f.BoolVar(&opt.SkipVerifySSL, "skip-verify-ssl", opt.SkipVerifySSL, "skip verifying the SSL certificate of the LLM provider")
 	f.BoolVar(&opt.SaveConfig, "save-config", opt.SaveConfig, "save the current configuration to the default config path")
 
@@ -353,31 +364,23 @@ func RunRootCommand(ctx context.Context, opt Options, args []string) error {
 		if err = startMCPServer(ctx, opt); err != nil {
 			return fmt.Errorf("failed to start MCP server: %w", err)
 		}
+		return nil // MCP server mode blocks, so we return here
 	}
 
-	// Load and register custom tools from config files and dirs
-	for _, path := range opt.ToolConfigPath {
-		tokens := strings.Split(path, string(os.PathSeparator))
-		for i, token := range tokens {
-			if token == "{CONFIG}" {
-				configDir, err := os.UserConfigDir()
-				if err != nil {
-					return fmt.Errorf("getting user config directory: %w", err)
-				}
-				tokens[i] = configDir
-			}
-			if token == "{HOME}" {
-				homeDir, err := os.UserHomeDir()
-				if err != nil {
-					return fmt.Errorf("getting user home directory: %w", err)
-				}
-				tokens[i] = homeDir
-			}
-		}
+	if err := handleCustomTools(opt.ToolConfigPaths); err != nil {
+		return fmt.Errorf("failed to process custom tools: %w", err)
+	}
 
-		if err := tools.LoadAndRegisterCustomTools(filepath.Join(tokens...)); err != nil {
-			// Log the error but continue execution, as custom tools are optional
-			klog.Warningf("Failed to load or register custom tools (path: %q): %v", opt.ToolConfigPath, err)
+	// Initialize MCP client if requested
+	var mcpManager *mcp.Manager
+	if opt.MCPClient {
+		var err error
+		mcpManager, err = InitializeMCPClient()
+		if err != nil {
+			klog.Errorf("Failed to initialize MCP client: %v", err)
+			os.Exit(1) // Fail fast instead of continuing with degraded functionality
+		} else {
+			klog.V(1).Info("MCP client initialization completed successfully")
 		}
 	}
 
@@ -440,7 +443,7 @@ func RunRootCommand(ctx context.Context, opt Options, args []string) error {
 
 	case UserInterfaceHTML:
 		var u ui.UI
-		u, err = html.NewHTMLUserInterface(doc, recorder)
+		u, err = html.NewHTMLUserInterface(doc, opt.UIListenAddress, recorder)
 		if err != nil {
 			return err
 		}
@@ -470,6 +473,7 @@ func RunRootCommand(ctx context.Context, opt Options, args []string) error {
 		RemoveWorkDir:      opt.RemoveWorkDir,
 		SkipPermissions:    opt.SkipPermissions,
 		EnableToolUseShim:  opt.EnableToolUseShim,
+		MCPClientEnabled:   opt.MCPClient,
 	}
 
 	err = conversation.Init(ctx, doc)
@@ -484,6 +488,21 @@ func RunRootCommand(ctx context.Context, opt Options, args []string) error {
 		ui:           userInterface,
 		conversation: conversation,
 		LLM:          llmClient,
+		mcpManager:   mcpManager,
+	}
+
+	// Prepare MCP server status blocks only when MCP client is enabled
+	var mcpBlocks []ui.Block
+	if opt.MCPClient {
+		if blocks, err := GetMCPServerStatusWithClientMode(opt.MCPClient, mcpManager); err == nil && len(blocks) > 0 {
+			header := ui.NewAgentTextBlock().WithText("\nMCP Server Status:")
+			mcpBlocks = append(mcpBlocks, header)
+			mcpBlocks = append(mcpBlocks, blocks...)
+			// Log MCP server status to log file
+			klog.Info("MCP server status retrieved successfully for REPL startup")
+		} else if err != nil {
+			klog.Warningf("Failed to retrieve MCP server status for REPL startup: %v", err)
+		}
 	}
 
 	if opt.Quiet {
@@ -493,7 +512,46 @@ func RunRootCommand(ctx context.Context, opt Options, args []string) error {
 		return chatSession.answerQuery(ctx, queryFromCmd)
 	}
 
-	return chatSession.repl(ctx, queryFromCmd)
+	return chatSession.repl(ctx, queryFromCmd, mcpBlocks)
+}
+
+func handleCustomTools(toolConfigPaths []string) error {
+	// resolve tool config paths, and then load and register custom tools from config files and dirs
+	for _, path := range toolConfigPaths {
+		pathWithPlaceholdersExpanded := path
+
+		if strings.Contains(pathWithPlaceholdersExpanded, "{CONFIG}") {
+			configDir, err := os.UserConfigDir()
+			if err != nil {
+				klog.Warningf("Failed to get user config directory for tools path %q: %v", path, err)
+				continue
+			}
+			pathWithPlaceholdersExpanded = strings.ReplaceAll(pathWithPlaceholdersExpanded, "{CONFIG}", configDir)
+		}
+
+		if strings.Contains(pathWithPlaceholdersExpanded, "{HOME}") {
+			homeDir, err := os.UserHomeDir()
+			if err != nil {
+				klog.Warningf("Failed to get user home directory for tools path %q: %v", path, err)
+				continue
+			}
+			pathWithPlaceholdersExpanded = strings.ReplaceAll(pathWithPlaceholdersExpanded, "{HOME}", homeDir)
+		}
+
+		cleanedPath := filepath.Clean(pathWithPlaceholdersExpanded)
+
+		klog.Infof("Attempting to load custom tools from processed path: %q (original value from config: %q)", cleanedPath, path)
+
+		if err := tools.LoadAndRegisterCustomTools(cleanedPath); err != nil {
+			if errors.Is(err, os.ErrNotExist) && !slices.Contains(defaultToolConfigPaths, path) {
+				// user specified a directory that does not exist, we must error out
+				return fmt.Errorf("custom tools directory not found (original value: %q, processed path: %q)", path, cleanedPath)
+			} else {
+				klog.Warningf("Failed to load or register custom tools (original value: %q, processed path: %q): %v", path, cleanedPath, err)
+			}
+		}
+	}
+	return nil
 }
 
 // session represents the user chat session (interactive/non-interactive both)
@@ -504,10 +562,14 @@ type session struct {
 	conversation    *agent.Conversation
 	availableModels []string
 	LLM             gollm.Client
+	mcpManager      *mcp.Manager
 }
 
 // repl is a read-eval-print loop for the chat session.
-func (s *session) repl(ctx context.Context, initialQuery string) error {
+func (s *session) repl(ctx context.Context, initialQuery string, initialBlocks []ui.Block) error {
+	for _, block := range initialBlocks {
+		s.doc.AddBlock(block)
+	}
 	query := initialQuery
 	if query == "" {
 		s.doc.AddBlock(ui.NewAgentTextBlock().WithText("Hey there, what can I help you with today?"))

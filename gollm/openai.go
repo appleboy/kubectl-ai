@@ -175,16 +175,14 @@ func (c *OpenAIClient) GenerateCompletion(ctx context.Context, req *CompletionRe
 	klog.Infof("OpenAI GenerateCompletion called with model: %s", req.Model)
 	klog.V(1).Infof("Prompt:\n%s", req.Prompt)
 
-	// Use the Chat Completions API as shown in examples
-	chatReq := openai.ChatCompletionNewParams{
-		Model: openai.ChatModel(req.Model), // Use the model specified in the request
+	// Use the Chat Completions API with the new v1.0.0 API
+	completion, err := c.client.Chat.Completions.New(ctx, openai.ChatCompletionNewParams{
+		Model: openai.ChatModel(req.Model),
 		Messages: []openai.ChatCompletionMessageParamUnion{
-			// Assuming a simple user message structure for now
 			openai.UserMessage(req.Prompt),
 		},
-	}
+	})
 
-	completion, err := c.client.Chat.Completions.New(ctx, chatReq)
 	if err != nil {
 		return nil, fmt.Errorf("failed to generate OpenAI completion: %w", err)
 	}
@@ -410,7 +408,7 @@ func (cs *openAIChatSession) SendStreaming(ctx context.Context, contents ...any)
 			if tool, ok := acc.JustFinishedToolCall(); ok {
 				klog.V(2).Infof("Tool call finished: %s %s", tool.Name, tool.Arguments)
 				currentToolCalls = append(currentToolCalls, openai.ChatCompletionMessageToolCall{
-					ID: tool.Id,
+					ID: tool.ID,
 					Function: openai.ChatCompletionMessageToolCallFunction{
 						Name:      tool.Name,
 						Arguments: tool.Arguments,

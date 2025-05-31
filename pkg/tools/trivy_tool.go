@@ -87,3 +87,8 @@ func parseFunctionArgs(functionArgs map[string]any, task any) error {
 	}
 	return nil
 }
+
+func (t *ScanImageWithTrivy) IsInteractive(args map[string]any) (bool, error) {
+	// Trivy scan operations are not interactive
+	return false, nil
+}

@@ -59,7 +59,7 @@ require (
 	github.com/muesli/reflow v0.3.0 // indirect
 	github.com/muesli/termenv v0.16.0 // indirect
 	github.com/ollama/ollama v0.6.5 // indirect
-	github.com/openai/openai-go v0.1.0-beta.10 // indirect
+	github.com/openai/openai-go v1.0.0 // indirect
 	github.com/pkg/browser v0.0.0-20240102092130-5ac0b6a4141c // indirect
 	github.com/rivo/uniseg v0.4.7 // indirect
 	github.com/spf13/cast v1.7.1 // indirect

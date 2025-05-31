@@ -11,7 +11,7 @@ require (
 	github.com/Azure/azure-sdk-for-go/sdk/resourcemanager/cognitiveservices/armcognitiveservices v1.7.0
 	github.com/Azure/azure-sdk-for-go/sdk/resourcemanager/subscription/armsubscription v1.2.0
 	github.com/ollama/ollama v0.6.5
-	github.com/openai/openai-go v0.1.0-beta.10 // Reverted to latest beta
+	github.com/openai/openai-go v1.0.0
 	google.golang.org/genai v1.4.0
 	k8s.io/klog/v2 v2.130.1
 )
