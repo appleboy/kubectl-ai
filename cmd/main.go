@@ -133,6 +133,11 @@ func (u *UserInterface) Type() string {
 	return "UserInterface"
 }
 
+var defaultConfigPaths = []string{
+	filepath.Join("{CONFIG}", "kubectl-ai", "config.yaml"),
+	filepath.Join("{HOME}", ".config", "kubectl-ai", "config.yaml"),
+}
+
 func (o *Options) InitDefaults() {
 	o.ProviderID = "gemini"
 	o.ModelID = "gemini-2.5-pro-preview-03-25"
@@ -172,31 +177,26 @@ func (o *Options) LoadConfiguration(b []byte) error {
 	return nil
 }
 
-var defaultConfigPaths = []string{
-	filepath.Join("{CONFIG}", "kubectl-ai", "config.yaml"),
-	filepath.Join("{HOME}", ".config", "kubectl-ai", "config.yaml"),
-}
-
 // expandConfigPath replaces {CONFIG} and {HOME} tokens in a path with actual directories.
 func expandConfigPath(configPath string) (string, error) {
-	tokens := strings.Split(configPath, string(os.PathSeparator))
-	for i, token := range tokens {
-		if token == "{CONFIG}" {
-			configDir, err := os.UserConfigDir()
-			if err != nil {
-				return "", fmt.Errorf("getting user config directory: %w", err)
-			}
-			tokens[i] = configDir
+	pathWithPlaceholdersExpanded := configPath
+
+	if strings.Contains(pathWithPlaceholdersExpanded, "{CONFIG}") {
+		configDir, err := os.UserConfigDir()
+		if err != nil {
+			return "", fmt.Errorf("getting user config directory (for config file path %q): %w", configPath, err)
 		}
-		if token == "{HOME}" {
-			homeDir, err := os.UserHomeDir()
-			if err != nil {
-				return "", fmt.Errorf("getting user home directory: %w", err)
-			}
-			tokens[i] = homeDir
-		}
+		pathWithPlaceholdersExpanded = strings.ReplaceAll(pathWithPlaceholdersExpanded, "{CONFIG}", configDir)
 	}
-	return filepath.Join(tokens...), nil
+
+	if strings.Contains(pathWithPlaceholdersExpanded, "{HOME}") {
+		homeDir, err := os.UserHomeDir()
+		if err != nil {
+			return "", fmt.Errorf("getting user home directory (for config file path %q): %w", configPath, err)
+		}
+		pathWithPlaceholdersExpanded = strings.ReplaceAll(pathWithPlaceholdersExpanded, "{HOME}", homeDir)
+	}
+	return pathWithPlaceholdersExpanded, nil
 }
 
 func (o *Options) LoadConfigurationFile() error {
@@ -206,7 +206,7 @@ func (o *Options) LoadConfigurationFile() error {
 			fmt.Fprintf(os.Stderr, "warning: could not expand config path %q: %v\n", configPath, err)
 			continue
 		}
-		configBytes, err := os.ReadFile(finalPath)
+		configBytes, err := os.ReadFile(filepath.Clean(finalPath))
 		if err != nil {
 			if os.IsNotExist(err) {
 				// ignore
