@@ -173,13 +173,13 @@ func (o *Options) LoadConfiguration(b []byte) error {
 }
 
 var defaultConfigPaths = []string{
-	"{CONFIG}/kubectl-ai/config.yaml",
-	"{HOME}/.config/kubectl-ai/config.yaml",
+	filepath.Join("{CONFIG}", "kubectl-ai", "config.yaml"),
+	filepath.Join("{HOME}", ".config", "kubectl-ai", "config.yaml"),
 }
 
 // expandConfigPath replaces {CONFIG} and {HOME} tokens in a path with actual directories.
 func expandConfigPath(configPath string) (string, error) {
-	tokens := strings.Split(configPath, "/")
+	tokens := strings.Split(configPath, string(os.PathSeparator))
 	for i, token := range tokens {
 		if token == "{CONFIG}" {
 			configDir, err := os.UserConfigDir()
