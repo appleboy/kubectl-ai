@@ -17,9 +17,11 @@ package main
 import (
 	"context"
 	"fmt"
+	"net/http"
 
 	"github.com/GoogleCloudPlatform/kubectl-ai/gollm"
 	"github.com/GoogleCloudPlatform/kubectl-ai/pkg/mcp"
+	"github.com/GoogleCloudPlatform/kubectl-ai/pkg/mcpauth"
 	"github.com/GoogleCloudPlatform/kubectl-ai/pkg/sandbox"
 	"github.com/GoogleCloudPlatform/kubectl-ai/pkg/tools"
 	mcpgo "github.com/mark3labs/mcp-go/mcp"
@@ -32,12 +34,13 @@ type kubectlMCPServer struct {
 	server        *server.MCPServer
 	tools         tools.Tools
 	workDir       string
-	mcpManager    *mcp.Manager // Add MCP manager for external tool calls
-	mcpServerMode string       // Server mode (e.g., "streamable-http", "stdio")
-	httpPort      int          // Port for HTTP-based server modes
+	mcpManager    *mcp.Manager   // Add MCP manager for external tool calls
+	mcpServerMode string         // Server mode (e.g., "streamable-http", "stdio")
+	httpPort      int            // Port for HTTP-based server modes
+	authConfig    mcpauth.Config // OAuth 2.1 bearer auth (only used in streamable-http mode; disabled when Issuer is empty)
 }
 
-func newKubectlMCPServer(ctx context.Context, kubectlConfig string, t tools.Tools, workDir string, exposeExternalTools bool, serverMode string, httpPort int) (*kubectlMCPServer, error) {
+func newKubectlMCPServer(ctx context.Context, kubectlConfig string, t tools.Tools, workDir string, exposeExternalTools bool, serverMode string, httpPort int, authConfig mcpauth.Config) (*kubectlMCPServer, error) {
 	// Register built-in tools (bash and kubectl) which require an executor.
 	// In MCP server mode, we use a local executor since there's no sandbox.
 	executor := sandbox.NewLocalExecutor()
@@ -55,6 +58,7 @@ func newKubectlMCPServer(ctx context.Context, kubectlConfig string, t tools.Tool
 		tools:         t,
 		mcpServerMode: serverMode,
 		httpPort:      httpPort,
+		authConfig:    authConfig,
 	}
 
 	// Add built-in tools
@@ -174,10 +178,25 @@ func (s *kubectlMCPServer) Serve(ctx context.Context) error {
 	case "streamable-http":
 		// Start the server in streamable HTTP mode
 		klog.Infof("Starting MCP server in streamable HTTP mode on port %d", s.httpPort)
-		httpServer := server.NewStreamableHTTPServer(s.server)
+		mcpHandler := server.NewStreamableHTTPServer(s.server)
 		endpoint := fmt.Sprintf(":%d", s.httpPort)
+
+		if s.authConfig.Enabled() {
+			// OAuth 2.1 Resource Server: require a valid Bearer access token on
+			// /mcp and publish Protected Resource Metadata for client discovery.
+			verifier, err := mcpauth.NewVerifier(ctx, s.authConfig)
+			if err != nil {
+				return fmt.Errorf("init MCP auth: %w", err)
+			}
+			mux := http.NewServeMux()
+			mux.Handle(mcpauth.PRMPath, s.authConfig.PRMHandler())
+			mux.Handle("/mcp", verifier.Middleware(mcpHandler))
+			klog.Infof("Listening for streamable HTTP connections on port %d (authentication enabled)", s.httpPort)
+			return http.ListenAndServe(endpoint, mux)
+		}
+
 		klog.Infof("Listening for streamable HTTP connections on port %d", s.httpPort)
-		return httpServer.Start(endpoint)
+		return mcpHandler.Start(endpoint)
 	default:
 		return server.ServeStdio(s.server)
 	}

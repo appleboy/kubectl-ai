@@ -34,6 +34,7 @@ import (
 	"github.com/GoogleCloudPlatform/kubectl-ai/pkg/agent"
 	"github.com/GoogleCloudPlatform/kubectl-ai/pkg/api"
 	"github.com/GoogleCloudPlatform/kubectl-ai/pkg/journal"
+	"github.com/GoogleCloudPlatform/kubectl-ai/pkg/mcpauth"
 	"github.com/GoogleCloudPlatform/kubectl-ai/pkg/sessions"
 	"github.com/GoogleCloudPlatform/kubectl-ai/pkg/tools"
 	"github.com/GoogleCloudPlatform/kubectl-ai/pkg/ui"
@@ -100,6 +101,18 @@ type Options struct {
 	MCPServerMode string `json:"mcpServerMode,omitempty"`
 	// Set the HTTP endpoint port for the MCP server when using HTTP transports like streamable-http.
 	HTTPPort int `json:"httpPort,omitempty"`
+
+	// MCP server OAuth 2.1 bearer authentication (streamable-http mode only).
+	// MCPAuthIssuer is the Authorization Server base URL (= JWT `iss`).
+	// A non-empty value enables authentication; empty keeps the previous,
+	// unauthenticated behavior.
+	MCPAuthIssuer string `json:"mcpAuthIssuer,omitempty"`
+	// MCPAuthAudience is this MCP server's resource identifier (expected JWT
+	// `aud`). Required when MCPAuthIssuer is set.
+	MCPAuthAudience string `json:"mcpAuthAudience,omitempty"`
+	// MCPAuthJWKSURL optionally overrides the JWKS URL; empty uses issuer-only
+	// OIDC discovery.
+	MCPAuthJWKSURL string `json:"mcpAuthJwksUrl,omitempty"`
 	// KubeConfigPath is the path to the kubeconfig file.
 	// If not provided, the default kubeconfig path will be used.
 	KubeConfigPath string `json:"kubeConfigPath,omitempty"`
@@ -178,6 +191,10 @@ func (o *Options) InitDefaults() {
 	o.MCPServerMode = "stdio"
 	// Default port for HTTP endpoint when using streamable-http mode
 	o.HTTPPort = 9080
+	// MCP server authentication is opt-in and disabled by default
+	o.MCPAuthIssuer = ""
+	o.MCPAuthAudience = ""
+	o.MCPAuthJWKSURL = ""
 
 	// Session management options
 	o.ResumeSession = ""
@@ -321,6 +338,9 @@ func (opt *Options) bindCLIFlags(f *pflag.FlagSet) error {
 	f.BoolVar(&opt.MCPClient, "mcp-client", opt.MCPClient, "enable MCP client mode to connect to external MCP servers")
 	f.StringVar(&opt.MCPServerMode, "mcp-server-mode", opt.MCPServerMode, "mode of the MCP server. Supported values: stdio, streamable-http")
 	f.IntVar(&opt.HTTPPort, "http-port", opt.HTTPPort, "port for the HTTP endpoint in MCP server mode (used with --mcp-server when --mcp-server-mode is streamable-http)")
+	f.StringVar(&opt.MCPAuthIssuer, "mcp-auth-issuer", opt.MCPAuthIssuer, "OAuth 2.1 authorization server base URL (JWT issuer). Non-empty enables Bearer authentication on the MCP server's streamable-http endpoint")
+	f.StringVar(&opt.MCPAuthAudience, "mcp-auth-audience", opt.MCPAuthAudience, "expected JWT audience (this MCP server's resource identifier). Required when --mcp-auth-issuer is set")
+	f.StringVar(&opt.MCPAuthJWKSURL, "mcp-auth-jwks-url", opt.MCPAuthJWKSURL, "optional override for the JWKS URL; empty uses OIDC discovery from the issuer")
 	f.BoolVar(&opt.EnableToolUseShim, "enable-tool-use-shim", opt.EnableToolUseShim, "enable tool use shim")
 	f.BoolVar(&opt.Quiet, "quiet", opt.Quiet, "run in non-interactive mode, requires a query to be provided as a positional argument")
 
@@ -694,7 +714,21 @@ func startMCPServer(ctx context.Context, opt Options) error {
 	if err := os.MkdirAll(workDir, 0o755); err != nil {
 		return fmt.Errorf("error creating work directory: %w", err)
 	}
-	mcpServer, err := newKubectlMCPServer(ctx, opt.KubeConfigPath, tools.Default(), workDir, opt.ExternalTools, opt.MCPServerMode, opt.HTTPPort)
+
+	authConfig := mcpauth.Config{
+		Issuer:   opt.MCPAuthIssuer,
+		Audience: opt.MCPAuthAudience,
+		JWKSURL:  opt.MCPAuthJWKSURL,
+	}
+	if authConfig.Enabled() && opt.MCPServerMode != "streamable-http" {
+		// Authentication only applies to the streamable-http transport, which is
+		// the only mode that exposes a network endpoint. The remaining config
+		// invariants (audience required, valid URLs) are enforced by
+		// mcpauth.NewVerifier so there is a single source of truth.
+		klog.Warningf("--mcp-auth-issuer is set but --mcp-server-mode is %q; authentication only applies to streamable-http and will be ignored", opt.MCPServerMode)
+	}
+
+	mcpServer, err := newKubectlMCPServer(ctx, opt.KubeConfigPath, tools.Default(), workDir, opt.ExternalTools, opt.MCPServerMode, opt.HTTPPort, authConfig)
 	if err != nil {
 		return fmt.Errorf("creating mcp server: %w", err)
 	}

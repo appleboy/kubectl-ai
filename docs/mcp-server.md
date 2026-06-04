@@ -33,6 +33,73 @@ kubectl-ai --mcp-server --mcp-server-mode streamable-http --http-port 9080
 
 This listens on `http://localhost:9080/mcp` by default.
 
+> **Warning:** Without authentication, anyone who can reach this port can execute
+> arbitrary `kubectl` and `bash` commands through the MCP protocol. When exposing
+> the `streamable-http` endpoint beyond localhost, enable authentication (see
+> below).
+
+### Securing the HTTP Endpoint with OAuth 2.1 (AuthGate)
+
+In `streamable-http` mode the MCP server can act as an OAuth 2.1 **Resource
+Server**, requiring callers to present a valid `Authorization: Bearer <JWT>`
+access token. Tokens are verified locally against the Authorization Server's
+JWKS (signature + `iss` + `aud` + `exp`, and `type == access`). This integrates
+with [go-authgate/authgate](https://github.com/go-authgate/authgate) as the
+Authorization Server, but works with any OAuth 2.1 / OIDC server that publishes
+a JWKS.
+
+Authentication is **opt-in**: if `--mcp-auth-issuer` is not set, the endpoint
+behaves exactly as before (no authentication, no metadata endpoint).
+
+```bash
+kubectl-ai --mcp-server --mcp-server-mode streamable-http --http-port 9080 \
+  --mcp-auth-issuer https://authgate.corp \
+  --mcp-auth-audience https://kubectl-ai.corp/mcp
+```
+
+What this enables:
+
+- `POST /mcp` requires a valid Bearer access token. Missing or invalid tokens
+  receive `401 Unauthorized` with a `WWW-Authenticate` header pointing at the
+  Protected Resource Metadata document.
+- `GET /.well-known/oauth-protected-resource` serves the Protected Resource
+  Metadata (RFC 9728) — unauthenticated — so MCP clients can discover the
+  Authorization Server automatically:
+
+  ```json
+  {
+    "resource": "https://kubectl-ai.corp/mcp",
+    "authorization_servers": ["https://authgate.corp"],
+    "bearer_methods_supported": ["header"]
+  }
+  ```
+
+Authentication flags:
+
+| Flag                  | Description                                                                                                                               |
+| --------------------- | ----------------------------------------------------------------------------------------------------------------------------------------- |
+| `--mcp-auth-issuer`   | Authorization Server base URL (= JWT `iss`). **Non-empty enables authentication.** Empty keeps the previous, unauthenticated behavior.    |
+| `--mcp-auth-audience` | This server's resource identifier (expected JWT `aud`, e.g. `https://kubectl-ai.corp/mcp`). **Required** when `--mcp-auth-issuer` is set. |
+| `--mcp-auth-jwks-url` | Optional override for the JWKS URL. Empty uses OIDC discovery from `<issuer>/.well-known/openid-configuration`.                           |
+
+Behavior notes:
+
+- **Fail-fast on configuration errors:** an invalid issuer URL or a missing
+  audience aborts startup with a clear error.
+- **Tolerant of a temporarily unreachable Authorization Server:** if the JWKS
+  cannot be fetched at startup, kubectl-ai logs a warning and keeps retrying in
+  the background instead of crashing.
+- **Fail-closed while keys are unavailable:** until signing keys are loaded,
+  `/mcp` returns `503 Service Unavailable` rather than letting any request
+  through.
+- **Reverse proxies:** the `resource_metadata` URL in the `WWW-Authenticate`
+  header is built from `X-Forwarded-Proto` (falling back to TLS detection) and
+  the request `Host`. Make sure your proxy forwards `X-Forwarded-Proto`.
+
+> **Tip:** [go-authgate/authgate](https://github.com/go-authgate/authgate) can
+> be used as the Authorization Server that issues and signs these access tokens.
+> See its documentation for installation and client setup.
+
 ## Configuration
 
 When `--external-tools` is enabled, the enhanced MCP server will automatically discover and expose tools from configured MCP servers. You can configure MCP servers using the standard MCP client configuration file.
@@ -128,13 +195,16 @@ Additional tools are available depending on the configured MCP servers:
 
 ## Command Line Options
 
-| Flag                | Default          | Description                                                            |
-| ------------------- | ---------------- | ---------------------------------------------------------------------- |
-| `--mcp-server`      | `false`          | Run in MCP server mode                                                 |
-| `--external-tools`  | `false`          | Discover and expose external MCP tools (requires --mcp-server)         |
-| `--kubeconfig`      | `~/.kube/config` | Path to kubeconfig file                                                |
-| `--mcp-server-mode` | `stdio`          | Transport for the MCP server (`stdio` or `streamable-http`)    |
-| `--http-port`       | `9080`           | Port for the HTTP endpoint when using `streamable-http` modes |
+| Flag                  | Default          | Description                                                                                                           |
+| --------------------- | ---------------- | --------------------------------------------------------------------------------------------------------------------- |
+| `--mcp-server`        | `false`          | Run in MCP server mode                                                                                                |
+| `--external-tools`    | `false`          | Discover and expose external MCP tools (requires --mcp-server)                                                        |
+| `--kubeconfig`        | `~/.kube/config` | Path to kubeconfig file                                                                                               |
+| `--mcp-server-mode`   | `stdio`          | Transport for the MCP server (`stdio` or `streamable-http`)                                                           |
+| `--http-port`         | `9080`           | Port for the HTTP endpoint when using `streamable-http` modes                                                         |
+| `--mcp-auth-issuer`   | `""`             | OAuth 2.1 authorization server base URL (JWT issuer). Non-empty enables Bearer auth on the `streamable-http` endpoint |
+| `--mcp-auth-audience` | `""`             | Expected JWT audience (this server's resource identifier). Required when `--mcp-auth-issuer` is set                   |
+| `--mcp-auth-jwks-url` | `""`             | Optional override for the JWKS URL; empty uses OIDC discovery from the issuer                                         |
 
 ## Architecture
 

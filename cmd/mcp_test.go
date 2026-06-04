@@ -23,6 +23,7 @@ import (
 
 	"github.com/GoogleCloudPlatform/kubectl-ai/gollm"
 	"github.com/GoogleCloudPlatform/kubectl-ai/pkg/mcp"
+	"github.com/GoogleCloudPlatform/kubectl-ai/pkg/mcpauth"
 	"github.com/GoogleCloudPlatform/kubectl-ai/pkg/tools"
 )
 
@@ -38,7 +39,7 @@ func TestKubectlMCPServerHTTPClientIntegration(t *testing.T) {
 
 	workDir := t.TempDir()
 
-	server, err := newKubectlMCPServer(ctx, "", toolset, workDir, false, "streamable-http", port)
+	server, err := newKubectlMCPServer(ctx, "", toolset, workDir, false, "streamable-http", port, mcpauth.Config{})
 	if err != nil {
 		t.Fatalf("failed to create MCP server: %v", err)
 	}

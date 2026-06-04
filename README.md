@@ -454,6 +454,18 @@ This starts an MCP endpoint at `http://localhost:9080/mcp`.
 
 The enhanced mode provides AI clients with access to both Kubernetes operations and general-purpose tools (filesystem, web search, databases, etc.) through a single MCP endpoint.
 
+### Authenticating the HTTP Endpoint (OAuth 2.1)
+
+The `streamable-http` endpoint is unauthenticated by default — anyone who can reach the port can run `kubectl` and `bash`. For non-localhost use, turn the server into an OAuth 2.1 Resource Server that requires a Bearer access token (verified locally against an authorization server's JWKS, e.g. [AuthGate](https://github.com/go-authgate/authgate)):
+
+```bash
+kubectl-ai --mcp-server --mcp-server-mode streamable-http --http-port 9080 \
+  --mcp-auth-issuer https://authgate.corp \
+  --mcp-auth-audience https://kubectl-ai.corp/mcp
+```
+
+Authentication is opt-in: without `--mcp-auth-issuer` the endpoint behaves exactly as before. See the [MCP Server Documentation](docs/mcp-server.md#securing-the-http-endpoint-with-oauth-21-authgate) for details.
+
 📖 **For detailed configuration, examples, and troubleshooting, see the [MCP Server Documentation](docs/mcp-server.md).**
 
 ## Start Contributing
