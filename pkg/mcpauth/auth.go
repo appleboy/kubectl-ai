@@ -105,6 +105,10 @@ func isAbsoluteURL(s string) bool {
 //     request (fail-closed) and never lets unverified traffic through.
 type Verifier struct {
 	cfg Config
+	// parser holds the immutable claim-validation rules (iss/aud/exp/alg/leeway).
+	// It is built once in NewVerifier and reused for every request so the option
+	// closures are not re-allocated on the hot path.
+	parser *jwt.Parser
 
 	mu sync.RWMutex
 	kf keyfunc.Keyfunc // nil until signing keys are loaded
@@ -120,7 +124,16 @@ func NewVerifier(ctx context.Context, cfg Config) (*Verifier, error) {
 		return nil, err
 	}
 
-	v := &Verifier{cfg: cfg}
+	v := &Verifier{
+		cfg: cfg,
+		parser: jwt.NewParser(
+			jwt.WithIssuer(cfg.Issuer),
+			jwt.WithAudience(cfg.Audience),
+			jwt.WithExpirationRequired(),
+			jwt.WithValidMethods([]string{"RS256", "ES256"}),
+			jwt.WithLeeway(clockLeeway),
+		),
+	}
 
 	kf, err := v.buildKeyfunc(ctx)
 	if err != nil {
@@ -221,13 +234,7 @@ func (v *Verifier) Middleware(next http.Handler) http.Handler {
 			return
 		}
 
-		token, err := jwt.Parse(tokenStr, kf.Keyfunc,
-			jwt.WithIssuer(v.cfg.Issuer),
-			jwt.WithAudience(v.cfg.Audience),
-			jwt.WithExpirationRequired(),
-			jwt.WithValidMethods([]string{"RS256", "ES256"}),
-			jwt.WithLeeway(clockLeeway),
-		)
+		token, err := v.parser.Parse(tokenStr, kf.Keyfunc)
 		if err != nil || !token.Valid {
 			v.reject(w, r, fmt.Sprintf("token validation failed: %v", err))
 			return
