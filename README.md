@@ -464,6 +464,8 @@ kubectl-ai --mcp-server --mcp-server-mode streamable-http --http-port 9080 \
   --mcp-auth-audience https://kubectl-ai.corp/mcp
 ```
 
+`--mcp-auth-audience` is this server's resource identifier; the JWT's `aud` claim must match it, which binds each token to *this* MCP server and prevents tokens issued for other services (same authorization server) from being replayed here. It is required once `--mcp-auth-issuer` is set — see [Why the audience (`aud`) matters](docs/mcp-server.md#why-the-audience-aud-matters).
+
 Authentication is opt-in: without `--mcp-auth-issuer` the endpoint behaves exactly as before. See the [MCP Server Documentation](docs/mcp-server.md#securing-the-http-endpoint-with-oauth-21-authgate) for details.
 
 📖 **For detailed configuration, examples, and troubleshooting, see the [MCP Server Documentation](docs/mcp-server.md).**

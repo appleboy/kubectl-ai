@@ -82,6 +82,40 @@ Authentication flags:
 | `--mcp-auth-audience` | This server's resource identifier (expected JWT `aud`, e.g. `https://kubectl-ai.corp/mcp`). **Required** when `--mcp-auth-issuer` is set. |
 | `--mcp-auth-jwks-url` | Optional override for the JWKS URL. Empty uses OIDC discovery from `<issuer>/.well-known/openid-configuration`.                           |
 
+#### Why the audience (`aud`) matters
+
+The `--mcp-auth-audience` value is this server's **resource identifier**. During
+verification kubectl-ai requires the JWT's `aud` claim to match it exactly (in
+addition to checking the signature, `iss`, and `exp`). This is what binds a token
+to *this specific* MCP server, and it is why the flag is mandatory once
+authentication is enabled — there is no safe default to guess.
+
+The signature and `iss` checks only prove the token is *genuine* (really issued
+by your Authorization Server). The `aud` check proves the token was *meant for
+you*. Without it, **any** valid token signed by the same Authorization Server
+would be accepted, which opens up:
+
+- **Cross-service token reuse / confused deputy:** one Authorization Server
+  typically issues tokens for many resource servers (other internal APIs,
+  dashboards, microservices). A user holding a legitimate token for, say, a
+  reporting API could replay it against the MCP server and gain the ability to
+  run `kubectl` and `bash`. With `aud` enforced, that token's audience does not
+  match this server's resource identifier, so it is rejected.
+- **Token theft by a downstream service:** if a token is not bound to an
+  audience, any service that receives it (or a compromised/man-in-the-middle
+  hop) can turn around and impersonate the user against the MCP server. Binding
+  the audience makes a token issued for someone else useless here.
+
+The audience also closes the discovery loop: the value is published verbatim as
+the `resource` field of the Protected Resource Metadata document (see below), so
+compliant MCP clients request a token scoped to exactly this resource (per RFC
+8707 Resource Indicators) and the server then enforces that same scope.
+
+> **Pick a stable, unique value.** Use a URI that uniquely identifies this MCP
+> server (commonly its public `/mcp` URL, e.g. `https://kubectl-ai.corp/mcp`).
+> It must be the same string the Authorization Server stamps into the `aud`
+> claim — a mismatch results in every request being rejected with `401`.
+
 Behavior notes:
 
 - **Fail-fast on configuration errors:** an invalid issuer URL or a missing
